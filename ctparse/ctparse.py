@@ -444,7 +444,13 @@ def run_corpus(corpus):
                 pos_first_parses += int(y and first_prod)
                 first_prod = False
                 y_score.append((prod.score, y))
-            raw_data.extend([{'target': target, 'resolution': d[0].nb_str(), 'y': d[0].nb_str() == target, 'rules': d[1], 'prod': d[2]} for d in this_data])
+            raw_data.extend([{'text': test,
+                              'ts': ts,
+                              'target': target,
+                              'resolution': d[0],
+                              'y': d[0].nb_str() == target,
+                              'rules': d[1],
+                              'prod': d[2]} for d in this_data])
             if not one_prod_passes:
                 logger.warning('failure: target "{}" never produced in "{}"'.format(target, test))
             pos_best_scored += int(max(y_score, key=lambda x: x[0])[1])
