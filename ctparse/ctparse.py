@@ -3,6 +3,7 @@ import regex
 import pickle
 import bz2
 import os
+from collections import defaultdict
 from copy import deepcopy
 from tqdm import tqdm
 from time import perf_counter
@@ -69,7 +70,9 @@ class StackElement:
         se.len_score = log(se.max_covered_chars/se.txt_len)
         se.update_score()
         if collect_data:
-            se.data = [('INITIAL', [p.key for p in se.prod], None)]
+            se.data = [{'rule_name': 'INITIAL',
+                        'production': [p.key for p in se.prod],
+                        'match': None}]
         return se
 
     @classmethod
@@ -83,7 +86,9 @@ class StackElement:
         se.update_score()
         if collect_data:
             se.data = deepcopy(se_old.data)
-            se.data.append((rule_name, [p.key for p in se_old.prod], match))
+            se.data.append({'rule_name': rule_name,
+                            'production': [p.key for p in se_old.prod],
+                            'match': match})
         return se
 
     def update_score(self):
@@ -419,16 +424,19 @@ def run_corpus(corpus):
     total_tests = 0
     Xs = []
     ys = []
-    raw_data = []
-    for target, ts, tests in tqdm(corpus):
+    test_data = []
+    for i, (target, ts, tests) in enumerate(tqdm(corpus)):
+        test_data.append({})
         ts = datetime.strptime(ts, '%Y-%m-%dT%H:%M')
         all_tests_pass = True
         for test in tests:
             one_prod_passes = False
             first_prod = True
             y_score = []
-            this_data = []
-            for prod in _ctparse(_preprocess_string(test), ts, max_stack_depth=0, data=this_data):
+            test_data[i][test] = []
+            one_test_data = []
+            for prod in _ctparse(_preprocess_string(test), ts, max_stack_depth=0,
+                                 data=one_test_data):
                 if prod is None:
                     continue
                 y = prod.resolution.nb_str() == target
@@ -444,13 +452,12 @@ def run_corpus(corpus):
                 pos_first_parses += int(y and first_prod)
                 first_prod = False
                 y_score.append((prod.score, y))
-            raw_data.extend([{'text': test,
-                              'ts': ts,
-                              'target': target,
-                              'resolution': d[0],
-                              'y': d[0].nb_str() == target,
-                              'rules': d[1],
-                              'prod': d[2]} for d in this_data])
+            test_data[i][test].extend([{'ts': ts,
+                                        'target': target,
+                                        'resolution': d[0],
+                                        'y': d[0].nb_str() == target,
+                                        'rules': d[1],
+                                        'prod': d[2]} for d in one_test_data])
             if not one_prod_passes:
                 logger.warning('failure: target "{}" never produced in "{}"'.format(target, test))
             pos_best_scored += int(max(y_score, key=lambda x: x[0])[1])
@@ -459,6 +466,26 @@ def run_corpus(corpus):
         if not all_tests_pass:
             logger.warning('failure: "{}" not always produced'.format(target))
             at_least_one_failed = True
+
+    test_data_by_rule = defaultdict(lambda: {True: [], False: []})
+    n_win = 3
+    for test_case in test_data:
+        for test, productions in test_case.items():
+            for result in productions:
+                for rule in result['rules']:
+                    if rule['rule_name'] == 'INITIAL':
+                        continue
+                    n_prod = len(rule['production'])
+                    r_start = rule['match'][0]
+                    r_end = rule['match'][1]
+                    # take n_win tokens before r_start, pad with SP to the left if there are less
+                    pre_win = ' '.join(['SP']*(n_win-r_start) + rule['production'][:r_start][-n_win:])
+                    match_win = ' '.join(rule['production'][r_start:r_end])
+                    # take n_win tokens after r_end, pad with EP to the right if there are less
+                    post_win = ' '.join(rule['production'][r_end:][:n_win] + ['EP']*(n_win-(n_prod-r_end)))
+                    test_data_by_rule[rule['rule_name']][result['y']].append(
+                        (pre_win, match_win, post_win))
+    
     logger.info('run {} tests on {} targets with a total of '
                 '{} positive and {} negative parses (={})'.format(
                     total_tests, len(corpus), pos_parses, neg_parses,
@@ -471,7 +498,28 @@ def run_corpus(corpus):
         pos_best_scored/total_tests))
     if at_least_one_failed:
         raise Exception('ctparse corpus has errors')
-    return Xs, ys, raw_data
+
+    return Xs, ys, test_data_by_rule
+
+
+def train_nb_rule(test_data_by_rule):
+    import numpy as np
+    from . nb_rule import NBRule
+    from sklearn.metrics import precision_score, recall_score
+
+    nbs = {}
+    for rule_name in test_data_by_rule.keys():
+        X = ([t[0] + ' ' + t[1] + ' ' + t[2] for t in test_data_by_rule[rule_name][True]] +
+             [t[0] + ' ' + t[1] + ' ' + t[2] for t in test_data_by_rule[rule_name][False]])
+        y = [1]*len(test_data_by_rule[rule_name][True]) + [0]*len(test_data_by_rule[rule_name][False])
+        try:
+            print(np.sum(np.array(y) == 1), np.sum(np.array(y) == 0))
+            nbs[rule_name] = NBRule()
+            nbs[rule_name].fit(X, np.array(y))
+            p = nbs[rule_name].predict(X)>0.5
+            print(rule_name, precision_score(y, p), recall_score(y, p))
+        except Exception as e:
+            print(rule_name, 'FAILED')
 
 
 def build_model(X, y, save=False):
