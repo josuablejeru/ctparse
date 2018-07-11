@@ -3,6 +3,7 @@ import regex
 import pickle
 import bz2
 import os
+from copy import deepcopy
 from tqdm import tqdm
 from time import perf_counter
 from datetime import datetime
@@ -55,7 +56,7 @@ class StackElement:
     * score: the score assigned to this production
     '''
     @classmethod
-    def from_regex_matches(cls, regex_matches, txt_len):
+    def from_regex_matches(cls, regex_matches, txt_len, collect_data):
         '''Create new initial stack element based on a production that has not
         yet been touched, i.e. it is only a sequence of matching
         regular expressions
@@ -67,10 +68,12 @@ class StackElement:
         se.max_covered_chars = se.prod[-1].mend - se.prod[0].mstart
         se.len_score = log(se.max_covered_chars/se.txt_len)
         se.update_score()
+        if collect_data:
+            se.data = [('INITIAL', [p.key for p in se.prod], None)]
         return se
 
     @classmethod
-    def from_rule_match(cls, se_old, rule_name, match, prod):
+    def from_rule_match(cls, se_old, rule_name, match, prod, collect_data=False):
         se = StackElement()
         se.prod = se_old.prod[:match[0]] + (prod,) + se_old.prod[match[1]:]
         se.rules = se_old.rules + (rule_name,)
@@ -78,12 +81,15 @@ class StackElement:
         se.max_covered_chars = se.prod[-1].mend - se.prod[0].mstart
         se.len_score = log(se.max_covered_chars/se.txt_len)
         se.update_score()
+        if collect_data:
+            se.data = deepcopy(se_old.data)
+            se.data.append((rule_name, [p.key for p in se_old.prod], match))
         return se
 
     def update_score(self):
         self.score = _nb.apply(self.rules) + self.len_score
 
-    def apply_rule(self, ts, rule, rule_name, match):
+    def apply_rule(self, ts, rule, rule_name, match, collect_data):
         '''Check whether the production in rule can be applied to this stack
         element. If yes, return a copy where this update is
         incorporated in the production, the record of applied rules
@@ -92,7 +98,7 @@ class StackElement:
         # prod, prod_name, start, end):
         prod = rule[0](ts, *self.prod[match[0]:match[1]])
         if prod is not None:
-            return StackElement.from_rule_match(self, rule_name, match, prod)
+            return StackElement.from_rule_match(self, rule_name, match, prod, collect_data)
         else:
             return
 
@@ -125,7 +131,7 @@ class CTParse:
                                          self.production)
 
 
-def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10):
+def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10, data=None):
     def get_score(seq, len_match):
         return _nb.apply(seq) + log(len_match/len(txt))
 
@@ -143,7 +149,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10
         stack, _ts = _timeit(_regex_stack)(txt, p, t_fun)
         logger.debug('time in _regex_stack: {:.0f}ms'.format(1000*_ts))
         # add empty production path + counter of contained regex
-        stack = [StackElement.from_regex_matches(s, len(txt)) for s in stack]
+        stack = [StackElement.from_regex_matches(s, len(txt), data is not None) for s in stack]
         logger.debug('initial stack length: {}'.format(len(stack)))
         # sort stack by length of covered string and - if that is equal - score
         # --> last element is longest coverage and highest scored
@@ -172,7 +178,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10
             for r_name, r in rules.items():
                 for r_match in _match_rule(s.prod, r[1]):
                     # apply production part of rule
-                    new_s = s.apply_rule(ts, r, r_name, r_match)
+                    new_s = s.apply_rule(ts, r, r_name, r_match, data is not None)
                     if new_s and stack_prod.get(new_s.prod, new_s.score - 1) < new_s.score:
                         new_stack.append(new_s)
                         logger.debug('  {} -> {}, score={:.2f}'.format(
@@ -184,6 +190,8 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10
                 # no new productions were generated from this stack element.
                 # emit all (probably partial) production
                 for x in s.prod:
+                    if data is not None:
+                        data.append((x, s.data, s.rules))
                     if not isinstance(x, RegexMatch):
                         # update score to be only relative to the text
                         # match by the actual production, not the
@@ -411,6 +419,7 @@ def run_corpus(corpus):
     total_tests = 0
     Xs = []
     ys = []
+    raw_data = []
     for target, ts, tests in tqdm(corpus):
         ts = datetime.strptime(ts, '%Y-%m-%dT%H:%M')
         all_tests_pass = True
@@ -418,7 +427,8 @@ def run_corpus(corpus):
             one_prod_passes = False
             first_prod = True
             y_score = []
-            for prod in ctparse(test, ts, max_stack_depth=0, debug=True):
+            this_data = []
+            for prod in _ctparse(_preprocess_string(test), ts, max_stack_depth=0, data=this_data):
                 if prod is None:
                     continue
                 y = prod.resolution.nb_str() == target
@@ -434,6 +444,7 @@ def run_corpus(corpus):
                 pos_first_parses += int(y and first_prod)
                 first_prod = False
                 y_score.append((prod.score, y))
+            raw_data.extend([{'target': target, 'resolution': d[0].nb_str(), 'y': d[0].nb_str() == target, 'rules': d[1], 'prod': d[2]} for d in this_data])
             if not one_prod_passes:
                 logger.warning('failure: target "{}" never produced in "{}"'.format(target, test))
             pos_best_scored += int(max(y_score, key=lambda x: x[0])[1])
@@ -454,7 +465,7 @@ def run_corpus(corpus):
         pos_best_scored/total_tests))
     if at_least_one_failed:
         raise Exception('ctparse corpus has errors')
-    return Xs, ys
+    return Xs, ys, raw_data
 
 
 def build_model(X, y, save=False):

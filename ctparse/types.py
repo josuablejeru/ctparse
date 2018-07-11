@@ -118,6 +118,17 @@ class Time(Artifact):
         self.DOW = DOW
         self.POD = POD
 
+    @property
+    def key(self):
+        return 'Time[{}{}{}{}{}{}{}]'.format(
+            1 if self.year is not None else 0,
+            1 if self.month is not None else 0,
+            1 if self.day is not None else 0,
+            1 if self.hour is not None else 0,
+            1 if self.minute is not None else 0,
+            1 if self.DOW is not None else 0,
+            1 if self.POD is not None else 0)
+
     # ------------------------------------------------------------------------------------
     # Make sure to not accidentially test bool(x) as False when x==0, but you meant x==None
     # ------------------------------------------------------------------------------------
@@ -253,6 +264,12 @@ class Interval(Artifact):
         self._attrs = ['t_from', 't_to']
         self.t_from = t_from
         self.t_to = t_to
+
+    @property
+    def key(self):
+        return 'Interval[{},{}]'.format(
+            0 if self.t_from is None else self.t_from.key,
+            0 if self.t_to is None else self.t_to.key)
 
     @property
     def isTimeInterval(self):
