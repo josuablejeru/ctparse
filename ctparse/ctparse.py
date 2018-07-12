@@ -137,7 +137,7 @@ class CTParse:
                                          self.production)
 
 
-def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10, data=None):
+def _ctparse(txt, ts=None, timeout=0, relative_match_len=0, max_stack_depth=0, data=None):
     def get_score(seq, len_match):
         if _nb.hasModel:
             return _nb.apply(seq) + log(len_match/len(txt))
@@ -209,6 +209,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10
                         score_x = get_score(s.rules, len(x))
                         # only emit productions not emitted before or
                         # productions emitted before but scored higher
+                        # if True:
                         if parse_prod.get(x, score_x - 1) < score_x:
                             parse_prod[x] = score_x
                             logger.debug(' => {}, score={:.2f}, '.format(
@@ -245,7 +246,7 @@ def _preprocess_string(txt):
     return _repl1.sub(' ', txt, concurrent=True).strip()
 
 
-def ctparse(txt, ts=None, timeout=0, debug=False, relative_match_len=1.0, max_stack_depth=10):
+def ctparse(txt, ts=None, timeout=1.0, debug=False, relative_match_len=1.0, max_stack_depth=10):
     '''Parse a string *txt* into a time expression
 
     :param ts: reference time
@@ -419,10 +420,8 @@ def run_corpus(corpus):
     the final production was correct, -1 otherwise.
 
     """
-    global _nb
-    nb_old = _nb
-    _nb = NB()
-
+    model_old = _nb._model
+    _nb._model = None
     at_least_one_failed = False
     # pos_parses: number of parses that are correct
     # neg_parses: number of parses that are wrong
@@ -445,13 +444,15 @@ def run_corpus(corpus):
             test_data[i][test] = []
             one_test_data = []
             max_prod = 500
-            for n_prod, prod in enumerate(_ctparse(_preprocess_string(test), ts, max_stack_depth=0,
+            for n_prod, prod in enumerate(_ctparse(_preprocess_string(test), ts,
+                                                   relative_match_len=1.0,
                                                    data=one_test_data)):
                 print(n_prod)
                 if n_prod > max_prod and one_prod_passes:
                     break
-                if prod is None:
-                    continue
+                # Should never happen - None is only yielded on timeout
+                # if prod is None:
+                #    continue
                 y = prod.resolution.nb_str() == target
                 # Build data set, one sample for each applied rule in
                 # the sequence of rules applied in this production
@@ -492,13 +493,15 @@ def run_corpus(corpus):
                     r_start = rule['match'][0]
                     r_end = rule['match'][1]
                     # take n_win tokens before r_start, pad with SP to the left if there are less
-                    pre_win = ' '.join(['SP']*(n_win-r_start) + rule['production'][:r_start][-n_win:])
+                    pre_win = ' '.join(['SP']*(n_win-r_start) +
+                                       rule['production'][:r_start][-n_win:])
                     match_win = ' '.join(rule['production'][r_start:r_end])
                     # take n_win tokens after r_end, pad with EP to the right if there are less
-                    post_win = ' '.join(rule['production'][r_end:][:n_win] + ['EP']*(n_win-(n_prod-r_end)))
+                    post_win = ' '.join(rule['production'][r_end:][:n_win] +
+                                        ['EP']*(n_win-(n_prod-r_end)))
                     test_data_by_rule[rule['rule_name']][result['y']].append(
                         (pre_win, match_win, post_win))
-    
+
     logger.info('run {} tests on {} targets with a total of '
                 '{} positive and {} negative parses (={})'.format(
                     total_tests, len(corpus), pos_parses, neg_parses,
@@ -511,8 +514,8 @@ def run_corpus(corpus):
         pos_best_scored/total_tests))
     if at_least_one_failed:
         raise Exception('ctparse corpus has errors')
-    
-    _nb = nb_old  # reset naive bayes model
+
+    _nb._model = model_old
     return Xs, ys, test_data_by_rule
 
 
@@ -525,12 +528,13 @@ def train_nb_rule(test_data_by_rule):
     for rule_name in test_data_by_rule.keys():
         X = ([t[0] + ' ' + t[1] + ' ' + t[2] for t in test_data_by_rule[rule_name][True]] +
              [t[0] + ' ' + t[1] + ' ' + t[2] for t in test_data_by_rule[rule_name][False]])
-        y = [1]*len(test_data_by_rule[rule_name][True]) + [0]*len(test_data_by_rule[rule_name][False])
+        y = ([1]*len(test_data_by_rule[rule_name][True]) +
+             [0]*len(test_data_by_rule[rule_name][False]))
         try:
             print(np.sum(np.array(y) == 1), np.sum(np.array(y) == 0))
             nbs[rule_name] = NBRule()
             nbs[rule_name].fit(X, np.array(y))
-            p = nbs[rule_name].predict(X)>0.5
+            p = nbs[rule_name].predict(X) > 0.5
             print(rule_name, precision_score(y, p), recall_score(y, p))
         except Exception as e:
             print(rule_name, 'FAILED')
@@ -548,6 +552,8 @@ def build_model(X, y, save=False):
 def regenerate_model():
     from . time.corpus import corpus as corpus_time
     global _nb
+    logger.info('Regenerating model')
     _nb = NB()
     X, y = run_corpus(corpus_time)
+    logger.info('Got {} training samples'.format(len(y)))
     build_model(X, y, save=True)
