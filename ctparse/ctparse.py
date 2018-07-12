@@ -57,7 +57,7 @@ class StackElement:
     * score: the score assigned to this production
     '''
     @classmethod
-    def from_regex_matches(cls, regex_matches, txt_len, collect_data):
+    def from_regex_matches(cls, regex_matches, txt_len):
         '''Create new initial stack element based on a production that has not
         yet been touched, i.e. it is only a sequence of matching
         regular expressions
@@ -69,14 +69,13 @@ class StackElement:
         se.max_covered_chars = se.prod[-1].mend - se.prod[0].mstart
         se.len_score = log(se.max_covered_chars/se.txt_len)
         se.update_score()
-        if collect_data:
-            se.data = [{'rule_name': 'INITIAL',
-                        'production': [p.key for p in se.prod],
-                        'match': None}]
+        se.data = [{'rule_name': 'INITIAL',
+                    'production': [p.key for p in se.prod],
+                    'match': None}]
         return se
 
     @classmethod
-    def from_rule_match(cls, se_old, rule_name, match, prod, collect_data=False):
+    def from_rule_match(cls, se_old, rule_name, match, prod):
         se = StackElement()
         se.prod = se_old.prod[:match[0]] + (prod,) + se_old.prod[match[1]:]
         se.rules = se_old.rules + (rule_name,)
@@ -84,17 +83,19 @@ class StackElement:
         se.max_covered_chars = se.prod[-1].mend - se.prod[0].mstart
         se.len_score = log(se.max_covered_chars/se.txt_len)
         se.update_score()
-        if collect_data:
-            se.data = deepcopy(se_old.data)
-            se.data.append({'rule_name': rule_name,
-                            'production': [p.key for p in se_old.prod],
-                            'match': match})
+        se.data = deepcopy(se_old.data)
+        se.data.append({'rule_name': rule_name,
+                        'production': [p.key for p in se_old.prod],
+                        'match': match})
         return se
 
     def update_score(self):
-        self.score = _nb.apply(self.rules) + self.len_score
+        if _nb.hasModel:
+            self.score = _nb.apply(self.rules) + self.len_score
+        else:
+            self.score = 0.0
 
-    def apply_rule(self, ts, rule, rule_name, match, collect_data):
+    def apply_rule(self, ts, rule, rule_name, match):
         '''Check whether the production in rule can be applied to this stack
         element. If yes, return a copy where this update is
         incorporated in the production, the record of applied rules
@@ -103,7 +104,7 @@ class StackElement:
         # prod, prod_name, start, end):
         prod = rule[0](ts, *self.prod[match[0]:match[1]])
         if prod is not None:
-            return StackElement.from_rule_match(self, rule_name, match, prod, collect_data)
+            return StackElement.from_rule_match(self, rule_name, match, prod)
         else:
             return
 
@@ -138,7 +139,10 @@ class CTParse:
 
 def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10, data=None):
     def get_score(seq, len_match):
-        return _nb.apply(seq) + log(len_match/len(txt))
+        if _nb.hasModel:
+            return _nb.apply(seq) + log(len_match/len(txt))
+        else:
+            return 0.0
 
     t_fun = _timeout(timeout)
 
@@ -154,7 +158,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10
         stack, _ts = _timeit(_regex_stack)(txt, p, t_fun)
         logger.debug('time in _regex_stack: {:.0f}ms'.format(1000*_ts))
         # add empty production path + counter of contained regex
-        stack = [StackElement.from_regex_matches(s, len(txt), data is not None) for s in stack]
+        stack = [StackElement.from_regex_matches(s, len(txt)) for s in stack]
         logger.debug('initial stack length: {}'.format(len(stack)))
         # sort stack by length of covered string and - if that is equal - score
         # --> last element is longest coverage and highest scored
@@ -183,7 +187,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=1.0, max_stack_depth=10
             for r_name, r in rules.items():
                 for r_match in _match_rule(s.prod, r[1]):
                     # apply production part of rule
-                    new_s = s.apply_rule(ts, r, r_name, r_match, data is not None)
+                    new_s = s.apply_rule(ts, r, r_name, r_match)
                     if new_s and stack_prod.get(new_s.prod, new_s.score - 1) < new_s.score:
                         new_stack.append(new_s)
                         logger.debug('  {} -> {}, score={:.2f}'.format(
@@ -415,6 +419,10 @@ def run_corpus(corpus):
     the final production was correct, -1 otherwise.
 
     """
+    global _nb
+    nb_old = _nb
+    _nb = NB()
+
     at_least_one_failed = False
     # pos_parses: number of parses that are correct
     # neg_parses: number of parses that are wrong
@@ -429,14 +437,19 @@ def run_corpus(corpus):
         test_data.append({})
         ts = datetime.strptime(ts, '%Y-%m-%dT%H:%M')
         all_tests_pass = True
+        print(target)
         for test in tests:
             one_prod_passes = False
             first_prod = True
             y_score = []
             test_data[i][test] = []
             one_test_data = []
-            for prod in _ctparse(_preprocess_string(test), ts, max_stack_depth=0,
-                                 data=one_test_data):
+            max_prod = 500
+            for n_prod, prod in enumerate(_ctparse(_preprocess_string(test), ts, max_stack_depth=0,
+                                                   data=one_test_data)):
+                print(n_prod)
+                if n_prod > max_prod and one_prod_passes:
+                    break
                 if prod is None:
                     continue
                 y = prod.resolution.nb_str() == target
@@ -498,7 +511,8 @@ def run_corpus(corpus):
         pos_best_scored/total_tests))
     if at_least_one_failed:
         raise Exception('ctparse corpus has errors')
-
+    
+    _nb = nb_old  # reset naive bayes model
     return Xs, ys, test_data_by_rule
 
 
@@ -520,6 +534,7 @@ def train_nb_rule(test_data_by_rule):
             print(rule_name, precision_score(y, p), recall_score(y, p))
         except Exception as e:
             print(rule_name, 'FAILED')
+    return nbs
 
 
 def build_model(X, y, save=False):
