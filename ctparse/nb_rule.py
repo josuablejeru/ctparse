@@ -8,8 +8,7 @@ logger = logging.getLogger(__name__)
 
 def _id(x):
     # can not pickle models if using a lambda below
-    parts = x.split(' ')
-    return [' '.join(parts[:3]), ' '.join(parts[-3:]), parts[2], parts[4]]
+    return x
 
 
 class NBRule:
@@ -18,7 +17,7 @@ class NBRule:
 
     def fit(self, X, y):
         self._model = make_pipeline(
-            CountVectorizer(ngram_range=(1, 1), lowercase=False,
+            CountVectorizer(ngram_range=(1, 2), lowercase=False,
                             tokenizer=_id),
             MultinomialNB(alpha=1.0))
         self._model.fit(X, y)

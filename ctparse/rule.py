@@ -34,7 +34,7 @@ _defines = (r'(?(DEFINE)(?<_hour>{regex_hour})(?P<_minute>{regex_minute})'
 
 def rule(*patterns):
     def _map(p):
-        if type(p) is str:
+        if isinstance(p, str):
             # its a regex
             global _regex_cnt
             if p in _str_regex:
@@ -62,7 +62,13 @@ def rule(*patterns):
         else:
             return p
 
-    patterns = [_map(p) for p in patterns]
+    def _has_consequtive_regex(ps):
+        for p0, p1 in zip(ps[:-1], ps[1:]):
+            if isinstance(p0, str) and isinstance(p1, str):
+                return True
+        return False
+
+    mapped_patterns = [_map(p) for p in patterns]
 
     def fwrapper(f):
         def wrapper(ts, *args):
@@ -75,14 +81,19 @@ def rule(*patterns):
             except ValueError:
                 return
             return res
-        rules[f.__name__] = (wrapper, patterns)
+        # check that in rules we never have a regex followed by a regex -
+        # that must be merged into one regex
+        if _has_consequtive_regex(patterns):
+            raise ValueError('rule {} contains consequtive regular expressions'.format(
+                f.__name__))    
+        rules[f.__name__] = (wrapper, mapped_patterns)
         return wrapper
     return fwrapper
 
 
 def regex_match(r_id):
     def _regex_match(r):
-        return type(r) == RegexMatch and r.id == r_id
+        return isinstance(r, RegexMatch) and r.id == r_id
     return _regex_match
 
 

@@ -188,11 +188,27 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=0, max_stack_depth=0, d
                 for r_match in _match_rule(s.prod, r[1]):
                     # apply production part of rule
                     new_s = s.apply_rule(ts, r, r_name, r_match)
-                    if new_s and stack_prod.get(new_s.prod, new_s.score - 1) < new_s.score:
-                        new_stack.append(new_s)
-                        logger.debug('  {} -> {}, score={:.2f}'.format(
-                            r_name, new_s.prod, new_s.score))
-                        stack_prod[new_s.prod] = new_s.score
+                    if new_s:
+                        # check whether the same new_s production has been
+                        # produced before and get its score
+                        #
+                        # 1. either it has been produced before this
+                        # consideration of s for production,
+                        # i.e. by a different sequence of rules
+                        #
+                        # 2. or it has been produces in this
+                        # consideration of s for production (i.e. in
+                        # this iteration over rules), but with higher
+                        # score
+                        #
+                        # if not, get a score that is smaller than the current one
+                        produced_before_score = stack_prod.get(new_s.prod, new_s.score - 1)
+                        if produced_before_score < new_s.score:
+                            # new production or higher scored
+                            new_stack.append(new_s)
+                            logger.debug('  {} -> {}, score={:.2f}'.format(
+                                r_name, new_s.prod, new_s.score))
+                            stack_prod[new_s.prod] = new_s.score
             if not new_stack:
                 logger.debug('~'*80)
                 logger.debug('no rules applicable: emitting')
@@ -436,20 +452,15 @@ def run_corpus(corpus):
         test_data.append({})
         ts = datetime.strptime(ts, '%Y-%m-%dT%H:%M')
         all_tests_pass = True
-        print(target)
         for test in tests:
             one_prod_passes = False
             first_prod = True
             y_score = []
             test_data[i][test] = []
             one_test_data = []
-            max_prod = 500
-            for n_prod, prod in enumerate(_ctparse(_preprocess_string(test), ts,
-                                                   relative_match_len=1.0,
-                                                   data=one_test_data)):
-                print(n_prod)
-                if n_prod > max_prod and one_prod_passes:
-                    break
+            for prod in _ctparse(_preprocess_string(test), ts,
+                                 relative_match_len=1.0,
+                                 data=one_test_data):
                 # Should never happen - None is only yielded on timeout
                 # if prod is None:
                 #    continue
@@ -516,26 +527,40 @@ def run_corpus(corpus):
         raise Exception('ctparse corpus has errors')
 
     _nb._model = model_old
-    return Xs, ys, test_data_by_rule
+    return Xs, ys, test_data, test_data_by_rule
 
 
 def train_nb_rule(test_data_by_rule):
     import numpy as np
     from . nb_rule import NBRule
-    from sklearn.metrics import precision_score, recall_score
+    from sklearn.metrics import precision_score, recall_score, roc_auc_score, f1_score
 
     nbs = {}
     for rule_name in test_data_by_rule.keys():
-        X = ([t[0] + ' ' + t[1] + ' ' + t[2] for t in test_data_by_rule[rule_name][True]] +
-             [t[0] + ' ' + t[1] + ' ' + t[2] for t in test_data_by_rule[rule_name][False]])
-        y = ([1]*len(test_data_by_rule[rule_name][True]) +
-             [0]*len(test_data_by_rule[rule_name][False]))
+        def _mapt(t):
+            return ([' '.join(t[0].split(' ')[-2:])] +
+                    t[0].split(' ')[-1:] +
+                    [t[1]] +
+                    t[2].split(' ')[:1] +
+                    [' '.join(t[2].split(' ')[:2])])
+
+        X = np.array([_mapt(t) for t in test_data_by_rule[rule_name][True]] +
+                     [_mapt(t) for t in test_data_by_rule[rule_name][False]])
+        y = np.array([1]*len(test_data_by_rule[rule_name][True]) +
+                     [0]*len(test_data_by_rule[rule_name][False]))
+        if len(y) <= 20 or np.sum(y == 1) <= 10 or np.sum(y == 0) <= 10:
+            print('No model for {} - pos: {} neg: {}'.format(rule_name,
+                                                             np.sum(y == 1),
+                                                             np.sum(y == 0)))
+            continue
         try:
-            print(np.sum(np.array(y) == 1), np.sum(np.array(y) == 0))
             nbs[rule_name] = NBRule()
             nbs[rule_name].fit(X, np.array(y))
-            p = nbs[rule_name].predict(X) > 0.5
-            print(rule_name, precision_score(y, p), recall_score(y, p))
+            p = nbs[rule_name].predict(X)
+            pd = p > 0.5
+            print('Rule: {:40s}    S: {:4d} P: {:5.1%} R: {:5.1%} F1: {:5.1%} A: {:5.1%}'.format(
+                rule_name, len(y), precision_score(y, pd), recall_score(y, pd),
+                f1_score(y, pd), roc_auc_score(y, p)))
         except Exception as e:
             print(rule_name, 'FAILED')
     return nbs
@@ -554,6 +579,6 @@ def regenerate_model():
     global _nb
     logger.info('Regenerating model')
     _nb = NB()
-    X, y = run_corpus(corpus_time)
+    X, y, X_rule = run_corpus(corpus_time)
     logger.info('Got {} training samples'.format(len(y)))
     build_model(X, y, save=True)

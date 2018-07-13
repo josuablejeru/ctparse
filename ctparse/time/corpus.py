@@ -329,11 +329,25 @@ corpus = [
       'August 5th at 8',
       '05.08.2018 8Uhr',
       '05.08.2018 (8 Uhr)')),
+
+    ('Time[]{2018-09-05 08:00 (X/X)}',
+     '2018-03-07T12:43',
+     ('5. September um 8',
+      'September 5th at 8',
+      '05.09.2018 8Uhr',
+      '05.09.2018 (8 Uhr)')),
+
     # ruleTODDate
     ('Time[]{2018-08-05 08:00 (X/X)}',
      '2018-03-07T12:43',
      ('um 8 am 5. August',
       'at 8 on August 5th')),
+
+    ('Time[]{2018-09-05 08:00 (X/X)}',
+     '2018-03-07T12:43',
+     ('um 8 am 5. September',
+      'at 8 on September 5th')),
+
     # ruleDateDate, ruleDOMDate
     ('Interval[]{2018-08-05 X:X (X/X) - 2018-08-16 X:X (X/X)}',
      '2018-03-07T12:43',
@@ -352,15 +366,15 @@ corpus = [
       '5. bis zum 16.8.',
       'vom 05.08.2018 zum 16.08.2018')),
     # ruleDOYDate
-    ('Interval[]{2017-08-05 X:X (X/X) - 2017-08-16 X:X (X/X)}',
+    ('Interval[]{2017-09-05 X:X (X/X) - 2017-09-16 X:X (X/X)}',
      '2018-03-07T12:43',
-     ('5.8. - 16.8.2017',
-      'Samstag 5.8. - Mittwoch 16.8.2017')),
+     ('5.9. - 16.9.2017',
+      'Dienstag 5.9. - Samstag 16.9.2017')),
     # ruleDateTimeDateTime
-    ('Interval[]{2018-08-05 08:00 (X/X) - 2018-08-16 13:00 (X/X)}',
+    ('Interval[]{2018-09-05 08:00 (X/X) - 2018-09-16 13:00 (X/X)}',
      '2018-03-07T12:43',
-     ('5.8. 8Uhr - 16.8. 13Uhr',
-      'August 5th 8h - August 16th 13h')),
+     ('5.9. 8Uhr - 16.9. 13Uhr',
+      'September 5th 8h - September 16th 13h')),
     # ruleTODTOD, ruleLatentTimeInterval
     ('Interval[]{2018-03-08 08:00 (X/X) - 2018-03-08 13:00 (X/X)}',
      '2018-03-07T12:43',
