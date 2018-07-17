@@ -85,7 +85,7 @@ def rule(*patterns):
         # that must be merged into one regex
         if _has_consequtive_regex(patterns):
             raise ValueError('rule {} contains consequtive regular expressions'.format(
-                f.__name__))    
+                f.__name__))
         rules[f.__name__] = (wrapper, mapped_patterns)
         return wrapper
     return fwrapper
