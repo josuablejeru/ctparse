@@ -677,6 +677,6 @@ def regenerate_model():  # pragma: no cover
     global _nb
     logger.info('Regenerating model')
     _nb = NB()
-    X, y, X_rule = run_corpus(corpus_time + auto_corpus)
+    X, y = run_corpus(corpus_time + auto_corpus)
     logger.info('Got {} training samples'.format(len(y)))
     build_model(X, y, save=True)
