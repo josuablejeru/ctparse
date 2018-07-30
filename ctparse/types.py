@@ -15,6 +15,9 @@ class Artifact:
     def __len__(self):
         return self.mend - self.mstart
 
+    def __bool__(self):
+        return True
+
     def __str__(self):
         return ''
 
@@ -70,7 +73,7 @@ class RegexMatch(Artifact):
 def _mk_pod_hours():
     raw_pod_hours = {
         'morning': [6, 9],
-        'beforenoon': [9, 12],
+        'forenoon': [9, 12],
         'noon': [11, 13],
         'afternoon': [12, 17],
         'evening': [17, 20],
@@ -80,7 +83,7 @@ def _mk_pod_hours():
     }
 
     ph = {}
-    for pod in ['morning', 'beforenoon', 'noon', 'afternoon', 'evening', 'night']:
+    for pod in ['morning', 'forenoon', 'noon', 'afternoon', 'evening', 'night']:
         for very in ['', 'very']:
             for mod in ['', 'early', 'late']:
                 if very == 'very' and mod == '':
@@ -163,6 +166,11 @@ class Time(Artifact):
         POD and neither a full date nor a full time
         '''
         return self._hasOnly('POD')
+
+    @property
+    def isHour(self):
+        '''only has an hour'''
+        return self._hasOnly('hour')
 
     @property
     def isTOD(self):
@@ -248,14 +256,16 @@ class Time(Artifact):
         if self.hasPOD:
             hour = pod_hours[self.POD][1]
         else:
-            hour = self.hour or 23
+            hour = self.hour if self.hour is not None else 23
         return Time(year=self.year, month=self.month, day=self.day,
-                    hour=hour, minute=self.minute or 59)
+                    hour=hour,
+                    minute=self.minute if self.minute is not None else 59)
 
     @property
     def dt(self):
         return datetime(self.year, self.month, self.day,
-                        self.hour, self.minute)
+                        self.hour or 0,
+                        self.minute or 0)
 
 
 class Interval(Artifact):
@@ -285,17 +295,11 @@ class Interval(Artifact):
         if self.t_from is not None:
             return self.t_from.start
         else:
-            end = self.t_to.end
-            end.hour = 0
-            end.minute = 0
-            return end
+            return None
 
     @property
     def end(self):
         if self.t_to is not None:
             return self.t_to.end
         else:
-            start = self.t_from.start
-            start.hour = 23
-            start.minute = 59
-            return start
+            return None

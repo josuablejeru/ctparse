@@ -72,13 +72,41 @@ class StackElement:
         se.data = [{'rule_name': 'INITIAL',
                     'production': [p.key for p in se.prod],
                     'match': None}]
+        logger.debug('='*80)
+        logger.debug('-> checking rule applicability')
+        # Reducing rules to only those applicable has no effect for
+        # small stacks, but on larger there is a 10-20% speed
+        # improvement
+        se.applicable_rules, _ts = _timeit(se._filter_rules)(rules)
+        logger.debug('of {} total rules {} are applicable in {}'.format(
+            len(rules), len(se.applicable_rules), se.prod))
+        logger.debug('time in _filter_rules: {:.0f}ms'.format(1000*_ts))
+        logger.debug('='*80)
+
         return se
+
+    def _filter_rules(self, rules):
+        """find all rules that can be applied to the current prod sequence"""
+        def _hasNext(it):
+            try:
+                next(it)
+                return True
+            except StopIteration as e:
+                return False
+
+        return {rule_name: r for rule_name, r in rules.items()
+                if _hasNext(_seq_match(self.prod, r[1]))}
 
     @classmethod
     def from_rule_match(cls, se_old, rule_name, match, prod):
         se = StackElement()
         se.prod = se_old.prod[:match[0]] + (prod,) + se_old.prod[match[1]:]
         se.rules = se_old.rules + (rule_name,)
+        # Refiltering does not give a speedup - actually rather 10%
+        # speed loss se.applicable_rules =
+        #
+        # se._filter_rules(se_old.applicable_rules)
+        se.applicable_rules = se_old.applicable_rules
         se.txt_len = se_old.txt_len
         se.max_covered_chars = se.prod[-1].mend - se.prod[0].mstart
         se.len_score = log(se.max_covered_chars/se.txt_len)
@@ -155,12 +183,6 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=0, max_stack_depth=0, d
         logger.debug('time in _match_regex: {:.0f}ms'.format(1000*_tp))
 
         logger.debug('='*80)
-        logger.debug('-> check rule applicability')
-        applicable_rules, _ts = _timeit(_filter_rules)(p)
-        logger.debug('of {} total rules {} are applicable'.format(len(rules), len(applicable_rules)))
-        logger.debug('time in _filter_rules: {:.0f}ms'.format(1000*_ts))
-
-        logger.debug('='*80)
         logger.debug('-> building initial stack')
         stack, _ts = _timeit(_regex_stack)(txt, p, t_fun)
         logger.debug('time in _regex_stack: {:.0f}ms'.format(1000*_ts))
@@ -179,7 +201,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=0, max_stack_depth=0, d
         # limit depth of stack
         stack = stack[-max_stack_depth:]
         logger.debug('stack length after max stack depth limit: {}'.format(len(stack)))
-        logger.debug('='*80)
+
         # track what has been added to the stack and do not add again
         # if the score is not better
         stack_prod = {}
@@ -191,7 +213,7 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=0, max_stack_depth=0, d
             logger.debug('-'*80)
             logger.debug('producing on {}, score={:.2f}'.format(s.prod, s.score))
             new_stack = []
-            for r_name, r in applicable_rules.items():
+            for r_name, r in s.applicable_rules.items():
                 for r_match in _match_rule(s.prod, r[1]):
                     # apply production part of rule
                     new_s = s.apply_rule(ts, r, r_name, r_match)
@@ -248,7 +270,6 @@ def _ctparse(txt, ts=None, timeout=0, relative_match_len=0, max_stack_depth=0, d
                     len(new_stack), len(stack)))
     except TimeoutError as e:
         logger.debug('Timeout on "{}"'.format(txt))
-        yield None
         return
 
 
@@ -263,10 +284,11 @@ else:
 
 # replace all comma, semicolon, whitespace, invisible control, opening and closing brackets
 _repl1 = regex.compile(r'[,;\pZ\pC\p{Ps}\p{Pe}]+', regex.VERSION1)
+_repl2 = regex.compile('(\p{Pd}|[\u2010-\u2015]|\u2043)+', regex.VERSION1)
 
 
 def _preprocess_string(txt):
-    return _repl1.sub(' ', txt, concurrent=True).strip()
+    return _repl2.sub('-', _repl1.sub(' ', txt, concurrent=True).strip()).strip()
 
 
 def ctparse(txt, ts=None, timeout=1.0, debug=False, relative_match_len=1.0, max_stack_depth=10):
@@ -297,7 +319,7 @@ def ctparse(txt, ts=None, timeout=1.0, debug=False, relative_match_len=1.0, max_
     if debug:
         return parsed
     else:
-        parsed = [p for p in parsed if p]
+        parsed = [p for p in parsed]
         if not parsed or (len(parsed) == 1 and not parsed[0]):
             logger.warning('Failed to produce result for "{}"'.format(txt))
             return
@@ -324,18 +346,6 @@ def _match_rule(seq, rule):
             if i_r == r_len:
                 yield i_s, i_start
         i_s += 1
-
-
-def _filter_rules(seq):
-    def _hasNext(it):
-        try:
-            next(it)
-            return True
-        except StopIteration as e:
-            return False
-
-    return {rule_name: r for rule_name, r in rules.items()
-            if _hasNext(_seq_match(seq, r[1]))}
 
 
 def _seq_match(seq, pat, offset=0):
@@ -371,16 +381,19 @@ def _seq_match(seq, pat, offset=0):
     # consequiteve elements which are both of type RegexMatch! Callers
     # obligation to ensure this!
 
-    if not seq or not pat:
-        # if either seq or pat is empty there will be no match
+    if not pat:
+        # if pat is empty yield the empty match
         yield []
+    elif not seq or not pat:
+        # if either seq or pat is empty there will be no match
+        return
     elif pat[-1].__name__ != '_regex_match':
         # there must be at least one additional element in seq at the
         # end
         yield from _seq_match(seq[:-1], pat[:-1], offset)
     elif len(pat) > len(seq):
         # if pat is longer than seq it cannot match
-        yield []
+        return
     else:
         p1 = pat[0]
         # if p1 is not a RegexMatch, then continue on next pat and
@@ -388,13 +401,18 @@ def _seq_match(seq, pat, offset=0):
         if p1.__name__ != '_regex_match':
             yield from _seq_match(seq[1:], pat[1:], offset+1)
         else:
+            # Get number of RegexMatch in p
+            n_regex = sum(1 for p in pat if p.__name__ == '_regex_match')
             # For each occurance of RegexMatch pat[0] in seq
             for iseq, s in enumerate(seq):
                 # apply _regex_match check
                 if p1(s):
                     # for each match of pat[1:] in seq[iseq+1:], yield a result
                     for subm in _seq_match(seq[iseq+1:], pat[1:], offset+iseq+1):
-                        yield [iseq+offset+1] + subm
+                        if len(subm) == n_regex - 1:
+                            # only yield if all subsequent RegexMatch
+                            # have been aligned!
+                            yield [iseq+offset] + subm
 
 
 def _match_regex(txt):
@@ -539,9 +557,6 @@ def run_corpus(corpus):
             for prod in _ctparse(_preprocess_string(test), ts,
                                  relative_match_len=1.0,
                                  data=one_test_data):
-                # Should never happen - None is only yielded on timeout
-                # if prod is None:
-                #    continue
                 y = prod.resolution.nb_str() == target
                 # Build data set, one sample for each applied rule in
                 # the sequence of rules applied in this production
@@ -644,7 +659,11 @@ def train_nb_rule(test_data_by_rule):
     return nbs
 
 
-def build_model(X, y, save=False):
+#
+# Not unittested - would take very long time to run these
+#
+
+def build_model(X, y, save=False):  # pragma: no cover
     nb = NB()
     nb.fit(X, y)
     if save:
@@ -652,11 +671,12 @@ def build_model(X, y, save=False):
     return nb
 
 
-def regenerate_model():
+def regenerate_model():  # pragma: no cover
     from . time.corpus import corpus as corpus_time
+    from . time.auto_corpus import corpus as auto_corpus
     global _nb
     logger.info('Regenerating model')
     _nb = NB()
-    X, y, X_rule = run_corpus(corpus_time)
+    X, y, X_rule = run_corpus(corpus_time + auto_corpus)
     logger.info('Got {} training samples'.format(len(y)))
     build_model(X, y, save=True)

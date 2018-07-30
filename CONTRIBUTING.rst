@@ -15,23 +15,45 @@ If you find an expressions that ``ctparse`` can not resolve correctly
 but you feel it should do, you can adjust the existing rules or add a
 new one.
 
-The following steps are a probably helpful guideline
+The following steps are probably a helpful guideline.
 
 * Add your case to the ``corpus.py`` file and run the corpus tests
-  using ``py.test tests/test_run_corpus.py``. If the tests do not
-  fail, rebuild the model and try again:
+  using ``py.test tests/test_run_corpus.py``. Now basically two things can happen:
 
-  .. code:: python
+  #. **The tests pass**, which means ``ctparse`` can correctly resolve
+     the expression. It might not score it highest. To check this,
+     rebuild the model and try parsing the expression again:
+
+     .. code:: python
+
+            from ctparse.ctparse import regenerate_model
+
+            regenerate_model()
+
+     To avoid issues with reloading, plsease restart the python
+     interpreter after regenerating the model.
+
+     If this fixes the issue please commit the updated ``corpus.py``
+     and the updated model as a pull request (PR) on GitHub, see this guide for
+     more information on what pull requests are and how to create them 
+     https://help.github.com/articles/creating-a-pull-request/.
+     
+     The scoring can be influenced by
+     adding more structurally identical examples to the corpus. Seeing
+     more samples where a specific sequence of rule applications leads
+     to the correct ranking will drive the model to favor these. This
+     comes, however, at the potential price of downranking certain
+     other production sequences. Although it would generally be
+     considered more favorable to add varying test cases (e.g. in
+     different languages, slight variation) to the corpus, the same
+     string can also just be duplicated to achive this *implict
+     up-weightning* effect.
    
-    from ctparse.ctparse import regenerate_model
+  #. **The tests fail**: if this is because not all tests in the
+     corpus pass, i.e. you get an error message like the following::
 
-    regenerate_model()
-
-  To avoid issues with reloading, pls. restart the python interpreter
-  after regenerating the model.
-
-  If this fixes the issue please commit the updated ``corpus.py`` and
-  the updated model as a PR.
+       ctparse.py 527 WARNING  failure: target "Time[]{2019-X-X X:X (X/X)}" never produced in "2019"
+       ctparse.py 532 WARNING  failure: "Time[]{2019-X-X X:X (X/X)}" not always produced
 
 * If the tests fail, run ``ctparse`` in debug mode to see what goes wrong:
 
@@ -64,6 +86,10 @@ The following steps are a probably helpful guideline
     time in _match_regex: 1ms
     ================================================================================
 
+  Each line has the form ``regex: RegexMatch[0-3]{114:May}`` and describes
+  the matched span in the text ``[0-3]``, the ID of the matching expression
+  ``114`` and the surface string that the expression matched ``May``.
+
   If relevant parts of your expression were not picked up, this is an
   indicator that you should either modify an existing regular
   expression or need to add a new rule (see below).
@@ -82,6 +108,21 @@ The following steps are a probably helpful guideline
     stack length after relative match length: 1
     stack length after max stack depth limit: 1
     ================================================================================
+
+  This is followed by a summary of how many applicable rules there are
+  per initial stack element::
+
+    ================================================================================
+    -> checking rule applicability
+    of 75 total rules 20 are applicable in (RegexMatch[0-3]{114:May}, RegexMatch[4-7]{135:5th})
+    time in _filter_rules: 0ms
+    ================================================================================
+    ================================================================================
+    -> checking rule applicability
+    of 75 total rules 20 are applicable in (RegexMatch[0-3]{114:May}, RegexMatch[4-5]{148:5})
+    time in _filter_rules: 0ms
+    ================================================================================
+    ...
 
   Again, if you do not see any sequence that captures all relevant
   parts of your input, you may need to modify the regular expressions
